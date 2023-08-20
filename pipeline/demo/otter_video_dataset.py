@@ -215,6 +215,8 @@ def ask_dataset(questions, model, video_files, save_file):
     answers = {}
     for data_id, question in tqdm(questions.items()):
         video_file = video_files[question['caption_id']]
+        if video_file is None:
+            continue
         frames_list = get_image(video_file)
         print(video_file)
         print(f"\nPrompt: {question['question']}")
