@@ -112,6 +112,7 @@ def get_response(input_data, prompt: str, model=None, image_processor=None, tens
         num_beams=3,
         no_repeat_ngram_size=3,
         bad_words_ids=bad_words_id,
+        do_sample=True,
     )
     parsed_output = (
         model.text_tokenizer.decode(generated_text[0])
@@ -255,7 +256,6 @@ if "__main__" == __name__:
     elif load_bit == "fp32":
         precision = {"torch_dtype": torch.float32}
 
-    # This model version is trained on MIMIC-IT DC dataset.
     model = OtterForConditionalGeneration.from_pretrained("../../ckpts", device_map="auto", **precision)
     tensor_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}[load_bit]
 
@@ -263,11 +263,12 @@ if "__main__" == __name__:
     tokenizer = model.text_tokenizer
     image_processor = transformers.CLIPImageProcessor()
     model.eval()
-
     for seed in range(args.multi_round):
+        # This model version is trained on MIMIC-IT DC dataset.
         set_seed(seed)
         save_file = os.path.join(save_path, f"seed{seed}.json")
         if os.path.isfile(save_file):
             continue
+
         print(f"\nSeed{seed}\n")
         answers = ask_dataset(questions, model, video_files, save_file)
