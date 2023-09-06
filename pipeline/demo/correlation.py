@@ -314,7 +314,7 @@ if "__main__" == __name__:
     # auto_fg_results, id_under_cont = load_auto_fg_results(args, root_path='answers')
     # auto_results = load_multi_auto_results(args, root_path='answers')
     auto_vqa_results = load_vqa_result(args, root_path='answers')
-    # the model-level alignment score
+    # The model-level alignment score
     for model in auto_vqa_results:
         auto_score = np.mean(list(auto_vqa_results[model]['avg'].values()))
         manual_score = np.mean([manual_results[model][id]['alignment'] for id in manual_results[model]])
