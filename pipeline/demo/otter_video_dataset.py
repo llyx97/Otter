@@ -25,6 +25,13 @@ def get_content_type(file_path):
     content_type, _ = mimetypes.guess_type(file_path)
     return content_type
 
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Unsupported value encountered.')
 
 # ------------------- Image and Video Handling Functions -------------------
 
@@ -79,8 +86,18 @@ def get_image(url: str) -> Union[Image.Image, list]:
 def get_formatted_prompt(prompt: str) -> str:
     return f"<image>User: {prompt} GPT:<answer>"
 
+def logit_to_rating(logits, tokenizer, temperature=1):
+    # Convert the output logit of Otter to video-text alignment rating
+    vocab = tokenizer.get_vocab()
+    yes_tokens, no_tokens = ['yes', 'Yes', 'YES'], ['no', 'No', 'NO']
+    yes_ids, no_ids = [vocab[t] for t in yes_tokens], [vocab[t] for t in no_tokens]
+    logits = torch.cat((logits[yes_ids], logits[no_ids]))
+    probs = torch.nn.functional.softmax(logits/temperature)
+    yes_prob, no_prob = probs[:3].sum(), probs[3:].sum()
+    return float(yes_prob.cpu())
 
-def get_response(input_data, prompt: str, model=None, image_processor=None, tensor_dtype=None) -> str:
+
+def get_response(input_data, prompt: str, model=None, image_processor=None, return_logits=True) -> str:
     if isinstance(input_data, Image.Image):
         vision_x = image_processor.preprocess([input_data], return_tensors="pt")["pixel_values"].unsqueeze(1).unsqueeze(0)
     elif isinstance(input_data, list):  # list of video frames
@@ -104,28 +121,43 @@ def get_response(input_data, prompt: str, model=None, image_processor=None, tens
     lang_x_attention_mask = lang_x["attention_mask"]
 
     bad_words_id = model.text_tokenizer(["User:", "GPT1:", "GFT:", "GPT:"], add_special_tokens=False).input_ids
-    generated_text = model.generate(
-        vision_x=vision_x.to(model.device),
-        lang_x=lang_x_input_ids.to(model.device),
-        attention_mask=lang_x_attention_mask.to(model.device),
-        max_new_tokens=512,
-        num_beams=3,
-        no_repeat_ngram_size=3,
-        bad_words_ids=bad_words_id,
-        do_sample=True,
-    )
-    parsed_output = (
-        model.text_tokenizer.decode(generated_text[0])
-        .split("<answer>")[-1]
-        .lstrip()
-        .rstrip()
-        .split("<|endofchunk|>")[0]
-        .lstrip()
-        .rstrip()
-        .lstrip('"')
-        .rstrip('"')
-    )
-    return parsed_output
+    if return_logits:
+        logits = model.generate(
+            vision_x=vision_x.to(model.device),
+            lang_x=lang_x_input_ids.to(model.device),
+            attention_mask=lang_x_attention_mask.to(model.device),
+            max_new_tokens=1,
+            num_beams=1,
+            no_repeat_ngram_size=3,
+            bad_words_ids=bad_words_id,
+            do_sample=False,
+            return_logits=True,
+        )
+        return logit_to_rating(logits, model.text_tokenizer)
+    else:
+        generated_text = model.generate(
+            vision_x=vision_x.to(model.device),
+            lang_x=lang_x_input_ids.to(model.device),
+            attention_mask=lang_x_attention_mask.to(model.device),
+            max_new_tokens=512,
+            num_beams=3,
+            no_repeat_ngram_size=3,
+            bad_words_ids=bad_words_id,
+            do_sample=True,
+            return_logits=False,
+        )
+        parsed_output = (
+            model.text_tokenizer.decode(generated_text[0])
+            .split("<answer>")[-1]
+            .lstrip()
+            .rstrip()
+            .split("<|endofchunk|>")[0]
+            .lstrip()
+            .rstrip()
+            .lstrip('"')
+            .rstrip('"')
+        )
+        return parsed_output
 
 def extract_qca(llm_output):
     # extract question, choices, answer and element from llm output
@@ -204,7 +236,7 @@ def save_answer(answers, save_file):
             dumped = json.dumps({id: answers[id]})
             f.write(dumped+'\n')
 
-def ask_dataset(questions, model, video_files, save_file):
+def ask_dataset(questions, model, video_files, save_file, return_logits):
     """
         Ask a dataset of questions with corresponding videos
         Args
@@ -220,7 +252,7 @@ def ask_dataset(questions, model, video_files, save_file):
         frames_list = get_image(video_file)
         print(video_file)
         print(f"\nPrompt: {question['question']}")
-        response = get_response(frames_list, question['question'], model, image_processor, tensor_dtype)
+        response = get_response(frames_list, question['question'], model, image_processor, return_logits)
         print(f"Response: {response}")
         answers[data_id] = {'caption_id': question['caption_id'], 'answer': response}
         save_answer(answers, save_file)
@@ -233,6 +265,7 @@ if "__main__" == __name__:
     parser = argparse.ArgumentParser()     
     parser.add_argument('--eval_data_path', default='../../data/fetv_data.json')        
     parser.add_argument('--save_path', default=None)        
+    parser.add_argument('--return_logits', default=False, type=str2bool, help='Whether only return logits of the first token from LLM, for video-text alignment evaluation')
     parser.add_argument('--video_model', default='videofusion')   
     parser.add_argument('--videoqa_file', default='../../data/question_yesno_000_099.json', help='the file containing Video QA questions')
     parser.add_argument('--multi_round', default=1, type=int, help='whether to run multiple times with different seeds')    
@@ -246,9 +279,12 @@ if "__main__" == __name__:
 
     if args.save_path is None:
         id_range = args.videoqa_file.split('/')[-1].replace('question_yesno_', '').replace('.json', '')
-        save_path = f"answers/{args.video_model}/{id_range}"
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
+        answer_type = 'score' if args.return_logits else 'text'
+        save_path = f"answers/{answer_type}/{args.video_model}/{id_range}"
+    else:
+        save_path = args.save_path
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
 
     load_bit = "fp32"
     if load_bit == "fp16":
@@ -273,4 +309,4 @@ if "__main__" == __name__:
             continue
 
         print(f"\nSeed{seed}\n")
-        answers = ask_dataset(questions, model, video_files, save_file)
+        answers = ask_dataset(questions, model, video_files, save_file, args.return_logits)

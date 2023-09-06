@@ -974,6 +974,7 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
         vision_x: torch.Tensor,
         lang_x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
         **generate_kwargs,
     ):
         """
@@ -999,6 +1000,7 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
                 place_submodules=False,
             )
             add_hook_to_module(self.lang_encoder, hook)
+
         num_beams = generate_kwargs.get("num_beams", 1)
         if num_beams > 1:
             vision_x = vision_x.repeat_interleave(num_beams, dim=0)
@@ -1007,8 +1009,12 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             input_ids=lang_x,
             attention_mask=attention_mask,
             eos_token_id=self.eoc_token_id,
+            return_dict_in_generate=return_logits,
+            output_scores=return_logits,
             **generate_kwargs,
         )
-
         self.lang_encoder.clear_conditioned_layers()
-        return output
+        if return_logits:
+            return output.scores[0][0]
+        else:
+            return output
