@@ -8,7 +8,7 @@ import scipy.stats as ss
 from sklearn.metrics import cohen_kappa_score
 from scipy.stats import spearmanr
 import krippendorff
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 def flatten(nest_list:list):
     return [j for i in nest_list for j in flatten(i)] if isinstance(nest_list, list) else [nest_list]
@@ -89,6 +89,9 @@ def load_multi_human_results(human_paths, model_names):
     return manual_results['avg']
 
 def extract_auto_score(text, qtype='binary'):
+    # If the answer is already a float value, directly return it
+    if isinstance(text, float):
+        return text
     # Map the textual evaluation to numerical scores
     if qtype=='binary':
         if text.split(',')[0].lower()=='yes':
@@ -167,22 +170,33 @@ def rand_eval_corr(args, manual_results):
     corr_kendall, corr_cohen, kripp_alpha, spearman_coef, p_value = compute_correlation(avg_rand_results, manual_results, compute_cohen=False)
     print(f"kendall_correlation={corr_kendall['Kendall-c']:.3f}, cohen_correlation={corr_cohen:.3f}, kripp_alpha={kripp_alpha:.3f}, spearman={spearman_coef:.3f}, p_value={p_value}")
     
-def score_map(args, scores):
-    new_scores = []
-    for s in scores:
+def score_map(args, scores, score_type='likert-scale'):
+    assert score_type in ['likert-scale', 'continual']
+    if score_type=='continual':
         if args.qtype=='binary':
-            if s<=4:
-                new_scores.append(0)
-            else:
-                new_scores.append(1)
+            scores[scores<0.5] = 0
+            scores[scores>=0.5] = 1
         elif args.qtype=='three_scale':
-            if s<=2:
-                new_scores.append(0)
-            elif s>2 and s<=4:
-                new_scores.append(1)
-            else:
-                new_scores.append(2)
-    return np.array(new_scores)
+            scores[scores<0.3] = 0
+            scores[(scores>=0.3)&(scores<0.6)] = 1
+            scores[scores>=0.6] = 2
+        return scores
+    else:
+        new_scores = []
+        for s in scores:
+            if args.qtype=='binary':
+                if s<=3:
+                    new_scores.append(0)
+                else:
+                    new_scores.append(1)
+            elif args.qtype=='three_scale':
+                if s<=2:
+                    new_scores.append(0)
+                elif s>2 and s<=4:
+                    new_scores.append(1)
+                else:
+                    new_scores.append(2)
+        return np.array(new_scores)
 
 def compute_acc(args, manual_results, auto_results):
     """
@@ -194,6 +208,7 @@ def compute_acc(args, manual_results, auto_results):
     acc_majority = sum(majority_preds==manual_results)/len(manual_results)
     for seed in range(args.num_auto_runs):
         tmp_auto_results = np.array(flatten([list(auto_results[model][seed].values()) for model in args.model_names]))
+        tmp_auto_results = score_map(args, tmp_auto_results, score_type='continual')
         accuracy[seed] = sum(manual_results==tmp_auto_results)/len(manual_results)
     acc_avg = np.mean(list(accuracy.values()))
     acc_std = np.std(list(accuracy.values()))
@@ -302,10 +317,11 @@ def load_vqa_result(args, root_path):
 if "__main__" == __name__:
     parser = argparse.ArgumentParser()      
     parser.add_argument('--model_names', nargs='+', default=['cogvideo', 'text2video-zero', 'videofusion', 'ground-truth'])
-    parser.add_argument('--qtype', default='three_scale', choices=['binary', 'three_scale', 'five_scale', 'five_scale_complex'])
+    parser.add_argument('--qtype', default='binary', choices=['binary', 'three_scale', 'five_scale', 'five_scale_complex'])
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--num_sample_to_eval', default=-1, type=int)
-    parser.add_argument('--num_auto_runs', default=5, type=int, help='number of auto llm evaluation runs')
+    parser.add_argument('--num_auto_runs', default=1, type=int, help='number of auto llm evaluation runs')
+    parser.add_argument('--videoqa_result_path', default='answers/score', help='the path of video qa result')
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -313,7 +329,7 @@ if "__main__" == __name__:
     manual_results = load_multi_human_results(manual_result_paths, args.model_names)
     # auto_fg_results, id_under_cont = load_auto_fg_results(args, root_path='answers')
     # auto_results = load_multi_auto_results(args, root_path='answers')
-    auto_vqa_results = load_vqa_result(args, root_path='answers')
+    auto_vqa_results = load_vqa_result(args, root_path=args.videoqa_result_path)
     # The model-level alignment score
     for model in auto_vqa_results:
         auto_score = np.mean(list(auto_vqa_results[model]['avg'].values()))
