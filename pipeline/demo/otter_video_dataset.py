@@ -176,6 +176,16 @@ def extract_qca(llm_output):
         print(f"Fail to extract question, choice, answer from the LLM output \n{llm_output}")
     return questions, choices, answers, element
 
+def extract_question(llm_output):
+    # extract question from llm output
+    questions = []
+    for line in llm_output.split('\n'):
+        if line.startswith('Q:'):
+            questions.append(line.replace('Q: ', ''))
+    if len(questions)==0:
+        print(f"Fail to extract question, choice, answer from the LLM output \n{llm_output}")
+    return questions
+
 def load_vqa(args):
     # load the dataset of questions, choices and answers from the llm outputs
     file_path = args.videoqa_file
@@ -194,8 +204,10 @@ def load_vqa(args):
         for line in lines:
             data = json.loads(line)
             for llm_output in data['gen_questions'].values():
-                questions, choices, answers, element = extract_qca(llm_output)
-                for q, c, a in zip(questions, choices, answers):
+                # questions, choices, answers, element = extract_qca(llm_output)
+                # for q, c, a in zip(questions, choices, answers):
+                questions = extract_question(llm_output)
+                for q in questions:
                     datas[qid] = {'caption_id': data['input_id'], 'question': q}
                     caption_ids.append(data['input_id'])
                     qid += 1
@@ -213,7 +225,8 @@ video_paths = {
         "videofusion": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/damo-text2video_outputs/16frames',
         "text2video-zero": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/text2video-zero_outputs/8fps_16frames',
         "cogvideo": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/cogvideo_outputs/videos',
-        "ground-truth": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/real_videos'
+        "ground-truth": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/real_videos',
+        "zeroscope": '/home/liuyuanxin/Ask-Anything/video_chat/manual_eval/zeroscope'
     }
 
 def build_video_files(args, video_ids):
@@ -278,9 +291,9 @@ if "__main__" == __name__:
     video_files = {id: vf for id, vf in video_files.items() if id in caption_ids}
 
     if args.save_path is None:
-        id_range = args.videoqa_file.split('/')[-1].replace('question_yesno_', '').replace('.json', '')
+        id_range = args.videoqa_file.split('/')[-1].replace('question_only_yes_', '').replace('.json', '')
         answer_type = 'score' if args.return_logits else 'text'
-        save_path = f"answers/{answer_type}/{args.video_model}/{id_range}"
+        save_path = f"answers/elements_wo_category/{answer_type}/{args.video_model}/{id_range}"
     else:
         save_path = args.save_path
     if not os.path.exists(save_path):
